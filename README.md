@@ -32,7 +32,7 @@ GND → GND
 - Interface responsiva
 
 ### Sensores
-- Leitura DHT11 (26°C, 65% funcionando)
+- Leitura DHT11 (Temperatura, Humidade..)
 
 
 ### LEDs RGB
@@ -49,11 +49,11 @@ GND → GND
 
 ```
 esp32wroom/
-├── main.py                    # Servidor principal
+├── main.py                    
 ├── modules/
-│   ├── environmental_sensor.py # Análise ambiental
-│   └── rgb_strip.py          # LEDs RGB
-└── lib/picoweb/              # Framework web
+│   ├── environmental_sensor.py 
+│   └── rgb_strip.py          
+└── lib/picoweb/             
 ```
 
 
