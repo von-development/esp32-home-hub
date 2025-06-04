@@ -1,87 +1,71 @@
-# ESP32 Smart Home Hub - Work in Progress
+# Sistema de Casa Inteligente ESP32-WROVER
 
-Sistema de automação residencial usando ESP32-WROVER com câmera, sensores e LEDs RGB.
+Sistema completo de automação residencial com ESP32-CAM, sensores, LEDs RGB, detecção de movimento e áudio PWM.
 
-## Hardware
+## Funcionalidades
 
-- **ESP32-WROVER** com câmera OV2640 integrada
-- **DHT11** - Sensor temperatura/umidade (Pino 15)
-- **8-RGB-LED** - Strip LEDs addressáveis (Pino 2)
+- **Câmera**: Streaming ao vivo + captura de fotos
+- **Detecção de Movimento**: PIR sensor com captura automática 
+- **Monitoramento Ambiental**: Temperatura e umidade (DHT11)
+- **LEDs RGB**: 8 LEDs programáveis com efeitos
+- **Sistema de Alarme**: 3 tipos de alarme inteligente
+- **Áudio PWM**: Notificações sonoras e controle de volume
+- **Interface Web**: Controle remoto responsivo
+- **WiFi Dual**: Station + Access Point
 
-## Conexões
+## Como Usar
 
-### DHT11
-```
-VCC  → 3.3V
-DATA → Pino 15
-GND  → GND
-```
-
-### 8-RGB-LED
-```
-VCC → 3.3V
-DIN → Pino 2  
-GND → GND
+### 1. Clonar o Projeto
+```bash
+git clone https://github.com/seu-usuario/esp32-smart-home.git
+cd esp32-smart-home
 ```
 
-## Implementado
-
-### Câmera
-- Streaming JPEG na rota `/`
-- Captura de fotos via web
-- Interface responsiva
-
-### Sensores
-- Leitura DHT11 (Temperatura, Humidade..)
+### 2. Flash do Firmware
+- Instale o MicroPython no ESP32-CAM
+- Use ferramentas como esptool.py ou Thonny IDE
+- Flash do firmware: `micropython-esp32cam.bin`
 
 
-### LEDs RGB
-- 8 LEDs controlados individualmente
-- Padrões visuais para status
-- Animações (arco-íris, gradientes)
 
-### Conectividade
-- WiFi dual (STA + AP)
-- Servidor web com picoweb
-- Interface multi-página
+## Documentação Completa
 
-## Estrutura
+Para detalhes técnicos completos, especificações de hardware, lista de componentes e diagramas de conexão, consulte:
+
+**[📋 Documentação Técnica Completa](docs/report.md)**
+
+
+## Estrutura do Projeto
 
 ```
 esp32wroom/
-├── main.py                    
+├── main.py              # Sistema principal
+├── config.py           # Configurações de pinos
 ├── modules/
-│   ├── environmental_sensor.py 
-│   └── rgb_strip.py          
-└── lib/picoweb/             
+│   ├── motion_detector.py
+│   ├── pwm_audio.py
+│   ├── web_server.py
+│   └── ...
+└── lib/                # Bibliotecas MicroPython
 ```
 
+## Hardware Necessário
 
-## Ainda Falta Fazer
-
-### Fase 3 - Segurança
-- [ ] Sensor PIR de movimento
-- [ ] Sistema de alarme
-- [ ] Notificações de movimento
-
-### Fase 4 - Interface Local  
-- [ ] Display LCD 16x2
-- [ ] Teclado matricial 4x4
-- [ ] Menu de configuração local
-- [ ] Controle sem web
-
-
-
-## Tecnologias
-
-- MicroPython
-- Picoweb (servidor web)
-- NeoPixel (LEDs)
-- Socket (rede)
+- ESP32-CAM AI Thinker
+- Sensor PIR HC-SR501
+- Sensor DHT11
+- Fita LED NeoPixel (8 LEDs)
+- Alto-falante 8Ω + Buzzers
+- Resistores e jumpers
+- Fonte 5V 2A
 
 ## Status
 
-**Funcional**: Câmera + DHT11 + LEDs RGB + Interface web
-**Próximo**: Sensores PIR para detecção de movimento
+ **Sistema Completo e Funcional**
+- 8 módulos integrados
+- Interface web responsiva  
+- Detecção de movimento + fotos
+- Sistema de áudio PWM
+- Controle total via web
 
 ---
