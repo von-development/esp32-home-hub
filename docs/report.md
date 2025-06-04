@@ -1,7 +1,6 @@
 # Sistema de Casa Inteligente ESP32-WROVER
 
 
-## Nome do Projeto
 **Sistema de Casa Inteligente ESP32-WROVER com Detecção de Movimento e Áudio PWM**
 
 Sistema completo de automação residencial baseado no ESP32-CAM AI Thinker, desenvolvido em MicroPython, integrando múltiplos sensores e atuadores para monitoramento e controle inteligente.
