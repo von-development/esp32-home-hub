@@ -3,21 +3,53 @@
 
 import sys
 sys.path.append('lib')
+sys.path.append('..')  # To access config
 from neopixel import NeoPixel
 from machine import Pin
 import time
 
+# Import configuration
+try:
+    from config import SMART_HOME_PINS, RGB_CONFIG
+except ImportError:
+    # Fallback if config not available
+    SMART_HOME_PINS = {'RGB_STRIP': 2}
+    RGB_CONFIG = {
+        'NUM_LEDS': 8,
+        'DEFAULT_BRIGHTNESS': 128,
+        'ANIMATION_SPEED': 50,
+        'STATUS_COLORS': {
+            'ready': (0, 255, 0),
+            'error': (255, 0, 0),
+            'warning': (255, 128, 0),
+            'info': (0, 0, 255),
+            'off': (0, 0, 0)
+        }
+    }
+
 class RGBStrip:
-    def __init__(self, pin=2, num_leds=8):
+    def __init__(self, pin=None, num_leds=None):
         """Initialize 8-RGB-LED strip on specified pin"""
+        # Use config values if not specified
+        if pin is None:
+            pin = SMART_HOME_PINS['RGB_STRIP']
+        if num_leds is None:
+            num_leds = RGB_CONFIG['NUM_LEDS']
+        
         self.pin = Pin(pin, Pin.OUT)
         self.num_leds = num_leds
         self.strip = NeoPixel(self.pin, num_leds)
         self.current_status = "initializing"
         
+        # Configuration from config.py
+        self.default_brightness = RGB_CONFIG['DEFAULT_BRIGHTNESS']
+        self.animation_speed = RGB_CONFIG['ANIMATION_SPEED']
+        self.status_colors = RGB_CONFIG['STATUS_COLORS']
+        
         # Turn off all LEDs initially
         self.clear()
         print("RGB Strip initialized - Pin:" + str(pin) + " LEDs:" + str(num_leds))
+        print(f"Config: Brightness={self.default_brightness}, Animation speed={self.animation_speed}ms")
     
     def clear(self):
         """Turn off all LEDs"""

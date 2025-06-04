@@ -3,17 +3,46 @@
 
 import sys
 sys.path.append('lib')
+sys.path.append('..')  # To access config
 import dht
 from machine import Pin
 import time
 import gc
 
+# Import configuration
+try:
+    from config import SMART_HOME_PINS, SENSOR_CONFIG
+except ImportError:
+    # Fallback if config not available
+    SMART_HOME_PINS = {'DHT11_SENSOR': 15}
+    SENSOR_CONFIG = {
+        'DHT11': {
+            'READ_INTERVAL': 3000,
+            'ERROR_THRESHOLD': 5,
+            'COMFORT_ZONES': {
+                'temperature_min': 20,
+                'temperature_max': 26,
+                'humidity_min': 30,
+                'humidity_max': 70
+            }
+        }
+    }
+
 class EnvironmentalSensor:
-    def __init__(self, dht_pin=15):
+    def __init__(self, dht_pin=None):
         """Initialize environmental sensors"""
+        # Use config pin if not specified
+        if dht_pin is None:
+            dht_pin = SMART_HOME_PINS['DHT11_SENSOR']
+        
         self.dht_sensor = dht.DHT11(Pin(dht_pin))
+        
+        # Configuration from config.py
+        self.reading_interval = SENSOR_CONFIG['DHT11']['READ_INTERVAL']
+        self.error_threshold = SENSOR_CONFIG['DHT11']['ERROR_THRESHOLD']
+        self.comfort_zones = SENSOR_CONFIG['DHT11']['COMFORT_ZONES']
+        
         self.last_reading_time = 0
-        self.reading_interval = 3000  # 3 seconds minimum
         
         # Current readings
         self.temperature_c = 0
@@ -25,6 +54,7 @@ class EnvironmentalSensor:
         self.error_count = 0
         
         print("Environmental sensor initialized on Pin " + str(dht_pin))
+        print(f"Config: Read interval={self.reading_interval}ms, Error threshold={self.error_threshold}")
     
     def read_sensors(self):
         """Read all environmental sensors"""
@@ -93,7 +123,7 @@ class EnvironmentalSensor:
     
     def is_healthy(self):
         """Check if sensors are working properly"""
-        return self.sensor_status == "ok" and self.error_count < 5
+        return self.sensor_status == "ok" and self.error_count < self.error_threshold
     
     def get_comfort_level(self):
         """Determine comfort level based on temperature and humidity"""
@@ -103,16 +133,22 @@ class EnvironmentalSensor:
         temp = self.temperature_c
         humidity = self.humidity
         
-        # Comfort zone logic
-        if 20 <= temp <= 26 and 30 <= humidity <= 70:
+        # Use comfort zones from config
+        temp_min = self.comfort_zones['temperature_min']
+        temp_max = self.comfort_zones['temperature_max']
+        humidity_min = self.comfort_zones['humidity_min']
+        humidity_max = self.comfort_zones['humidity_max']
+        
+        # Comfort zone logic using config values
+        if temp_min <= temp <= temp_max and humidity_min <= humidity <= humidity_max:
             return "comfortable"
-        elif temp < 18:
+        elif temp < temp_min - 2:
             return "too_cold"
-        elif temp > 28:
+        elif temp > temp_max + 2:
             return "too_hot"
-        elif humidity < 30:
+        elif humidity < humidity_min:
             return "too_dry"
-        elif humidity > 70:
+        elif humidity > humidity_max:
             return "too_humid"
         else:
             return "moderate"

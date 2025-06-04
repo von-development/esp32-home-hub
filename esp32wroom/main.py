@@ -1,435 +1,514 @@
-# ESP32-WROVER Advanced Camera Server with Picoweb Framework
-# Dual WiFi Mode (STA + AP) with PSRAM support
+# ESP32-WROVER Smart Home System - Main Controller
+# Organized main file using configuration system and modular architecture
 
-import picoweb
+import sys
+import gc
 import utime
 import camera
-import gc
 import network
 import ulogging as logging
 
-# WiFi Configuration
-SSID_ROUTER = "Avenida"
-PASSWORD_ROUTER = "Avenida2024"
-SSID_AP = "ESP32-CAM"
-PASSWORD_AP = "12345678"
-LOCAL_IP = "192.168.4.1"
-SUBNET = "255.255.255.0"
-GATEWAY = "192.168.4.1"
-DNS = "8.8.8.8"
+# Import configuration
+from config import (
+    WIFI_CONFIG, CAMERA_CONFIG, SYSTEM_CONFIG, 
+    get_camera_pin_config, get_system_status
+)
 
-# Global variables
-sta_if = None
-ap_if = None
-camera_settings = {
-    'resolution': camera.FRAME_QVGA,
-    'quality': 15,
-    'brightness': 0,
-    'contrast': 0,
-    'saturation': 0,
-    'flip': 1,
-    'mirror': 1
-}
+# Import modules
+sys.path.append('modules')
+import web_server
+from environmental_sensor import EnvironmentalSensor
+from alarm_system import SmartAlarmSystem
+from rgb_strip import RGBStrip
+from motion_detector import MotionDetector
+from pwm_audio import PWMAudio
 
-def wifi_setup():
-    """Setup dual WiFi mode (STA + AP)"""
-    global sta_if, ap_if
+# Import pins from config
+from config import SMART_HOME_PINS
+
+class SmartHomeSystem:
+    def __init__(self):
+        """Initialize the complete Smart Home System"""
+        self.system_name = "ESP32-WROVER Smart Home"
+        self.version = "2.0.0"
+        self.start_time = utime.time()
+        
+        # System components
+        self.wifi_sta = None
+        self.wifi_ap = None
+        self.camera_initialized = False
+        self.web_server = None
+        
+        # Smart home modules
+        self.env_sensor = None
+        self.alarm_system = None
+        self.rgb_strip = None
+        self.motion_detector = None
+        self.pwm_audio = None
+        
+        # System status
+        self.system_status = {
+            'wifi_sta_ok': False,
+            'wifi_ap_ok': False,
+            'camera_ok': False,
+            'sensors_ok': False,
+            'alarm_ok': False,
+            'rgb_ok': False,
+            'motion_ok': False,
+            'audio_ok': False,
+            'web_server_ok': False
+        }
+        
+        print(f"🚀 Initializing {self.system_name} v{self.version}")
+        print("=" * 50)
     
-    # Clean up existing connections
-    try:
-        temp_sta = network.WLAN(network.STA_IF)
-        temp_ap = network.WLAN(network.AP_IF)
-        if temp_sta.active():
-            temp_sta.disconnect()
-            temp_sta.active(False)
-        if temp_ap.active():
-            temp_ap.active(False)
-        utime.sleep(0.5)
-    except:
-        pass
-    
-    # Setup AP mode
-    ap_if = network.WLAN(network.AP_IF)
-    ap_if.active(False)
-    utime.sleep(0.1)
-    ap_if.ifconfig([LOCAL_IP, SUBNET, GATEWAY, DNS])  # Fixed order
-    ap_if.active(True)
-    ap_if.config(essid=SSID_AP, authmode=network.AUTH_WPA_WPA2_PSK, password=PASSWORD_AP)
-    utime.sleep(1)
-    print("AP Mode: " + SSID_AP + " - IP: " + ap_if.ifconfig()[0])
-    
-    # Setup STA mode
-    sta_if = network.WLAN(network.STA_IF)
-    sta_if.active(False)
-    utime.sleep(0.1)
-    sta_if.active(True)
-    
-    if not sta_if.isconnected():
-        print("Connecting to " + SSID_ROUTER + "...")
-        sta_if.connect(SSID_ROUTER, PASSWORD_ROUTER)
-        timeout = 15
-        while not sta_if.isconnected() and timeout > 0:
+    def initialize_wifi(self):
+        """Initialize WiFi in dual mode (STA + AP)"""
+        print("📡 Setting up WiFi connections...")
+        
+        try:
+            # Clean up any existing connections
+            try:
+                temp_sta = network.WLAN(network.STA_IF)
+                temp_ap = network.WLAN(network.AP_IF)
+                if temp_sta.active():
+                    temp_sta.disconnect()
+                    temp_sta.active(False)
+                if temp_ap.active():
+                    temp_ap.active(False)
+                utime.sleep(0.5)
+            except:
+                pass
+            
+            # Setup Access Point
+            self.wifi_ap = network.WLAN(network.AP_IF)
+            self.wifi_ap.active(False)
+            utime.sleep(0.1)
+            
+            # Configure AP with settings from config
+            ap_config = [
+                WIFI_CONFIG['AP_IP'],
+                WIFI_CONFIG['AP_SUBNET'],
+                WIFI_CONFIG['AP_GATEWAY'],
+                WIFI_CONFIG['AP_DNS']
+            ]
+            self.wifi_ap.ifconfig(ap_config)
+            self.wifi_ap.active(True)
+            self.wifi_ap.config(
+                essid=WIFI_CONFIG['AP_SSID'],
+                authmode=network.AUTH_WPA_WPA2_PSK,
+                password=WIFI_CONFIG['AP_PASSWORD']
+            )
             utime.sleep(1)
-            timeout -= 1
+            
+            if self.wifi_ap.active():
+                self.system_status['wifi_ap_ok'] = True
+                print(f"✅ AP Mode: {WIFI_CONFIG['AP_SSID']} - IP: {self.wifi_ap.ifconfig()[0]}")
+            
+            # Setup Station Mode
+            self.wifi_sta = network.WLAN(network.STA_IF)
+            self.wifi_sta.active(False)
+            utime.sleep(0.1)
+            self.wifi_sta.active(True)
+            
+            if not self.wifi_sta.isconnected():
+                print(f"🔄 Connecting to {WIFI_CONFIG['STA_SSID']}...")
+                self.wifi_sta.connect(WIFI_CONFIG['STA_SSID'], WIFI_CONFIG['STA_PASSWORD'])
+                
+                timeout = WIFI_CONFIG['STA_TIMEOUT']
+                while not self.wifi_sta.isconnected() and timeout > 0:
+                    utime.sleep(1)
+                    timeout -= 1
+                
+                if self.wifi_sta.isconnected():
+                    self.system_status['wifi_sta_ok'] = True
+                    print(f"✅ STA Mode: Connected - IP: {self.wifi_sta.ifconfig()[0]}")
+                else:
+                    print("⚠️  STA connection failed - AP mode still available")
+            
+        except Exception as e:
+            print(f"❌ WiFi setup error: {e}")
+            return False
         
-        if sta_if.isconnected():
-            print("STA Mode: Connected - IP: " + sta_if.ifconfig()[0])
-        else:
-            print("STA connection failed")
-
-def camera_init():
-    """Initialize camera with PSRAM"""
-    try:
-        camera.deinit()
-        camera.init(0, d0=4, d1=5, d2=18, d3=19, d4=36, d5=39, d6=34, d7=35,
-                    format=camera.JPEG, xclk_freq=camera.XCLK_20MHz,
-                    href=23, vsync=25, reset=-1, pwdn=-1,
-                    sioc=27, siod=26, xclk=21, pclk=22, fb_location=camera.PSRAM)
-        
-        apply_camera_settings()
-        print("Camera initialized with PSRAM")
         return True
-    except Exception as e:
-        print("Camera init failed: " + str(e))
+    
+    def initialize_camera(self):
+        """Initialize camera with configuration settings"""
+        print("📷 Initializing camera...")
+        
+        retries = CAMERA_CONFIG['INIT_RETRIES']
+        
+        for attempt in range(retries):
+            try:
+                # Deinitialize if already initialized
+                camera.deinit()
+                utime.sleep(0.1)
+                
+                # Get camera pins from config
+                pins = get_camera_pin_config()
+                
+                # Initialize with config settings using proper camera constants
+                camera.init(
+                    0,  # Camera ID
+                    d0=pins['D0'], d1=pins['D1'], d2=pins['D2'], d3=pins['D3'],
+                    d4=pins['D4'], d5=pins['D5'], d6=pins['D6'], d7=pins['D7'],
+                    format=camera.JPEG,  # Use camera constant
+                    xclk_freq=camera.XCLK_20MHz,  # Use camera constant
+                    href=pins['HREF'], vsync=pins['VSYNC'],
+                    reset=pins['RESET'], pwdn=pins['PWDN'],
+                    sioc=pins['SIOC'], siod=pins['SIOD'],
+                    xclk=pins['XCLK'], pclk=pins['PCLK'],
+                    fb_location=camera.PSRAM  # Use camera constant
+                )
+                
+                # Apply default settings
+                self._apply_camera_settings()
+                
+                # Test capture
+                test_buf = camera.capture()
+                if test_buf:
+                    del test_buf
+                    self.camera_initialized = True
+                    self.system_status['camera_ok'] = True
+                    print("✅ Camera initialized successfully")
+                    return True
+                
+            except Exception as e:
+                print(f"⚠️  Camera init attempt {attempt + 1} failed: {e}")
+                if attempt < retries - 1:
+                    utime.sleep(1)
+        
+        print("❌ Camera initialization failed after all attempts")
         return False
-
-def apply_camera_settings():
-    """Apply current camera settings"""
-    camera.framesize(camera_settings['resolution'])
-    camera.quality(camera_settings['quality'])
-    camera.brightness(camera_settings['brightness'])
-    camera.contrast(camera_settings['contrast'])
-    camera.saturation(camera_settings['saturation'])
-    camera.flip(camera_settings['flip'])
-    camera.mirror(camera_settings['mirror'])
-
-# HTML Templates
-
-MAIN_PAGE = """<!DOCTYPE html>
-<html>
-<head>
-    <title>ESP32-CAM Server</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; }
-        .header { text-align: center; color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }
-        .nav { display: flex; justify-content: center; margin: 20px 0; }
-        .nav a { margin: 0 10px; padding: 10px 20px; background: #4CAF50; color: white; text-decoration: none; border-radius: 5px; }
-        .nav a:hover { background: #45a049; }
-        .info { background: #e7f3ff; padding: 15px; border-radius: 5px; margin: 20px 0; }
-        .status { display: flex; justify-content: space-around; margin: 20px 0; }
-        .status div { text-align: center; padding: 10px; background: #f9f9f9; border-radius: 5px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1 class="header">🚀 ESP32-WROVER Camera Server</h1>
-        
-        <div class="nav">
-            <a href="/stream">📹 Live Stream</a>
-            <a href="/capture">📸 Capture Photo</a>
-            <a href="/settings">⚙️ Settings</a>
-            <a href="/status">📊 Status</a>
-        </div>
-        
-        <div class="info">
-            <h3>📡 Network Information</h3>
-            <div class="status">
-                <div><strong>STA Mode</strong><br>%s</div>
-                <div><strong>AP Mode</strong><br>%s</div>
-            </div>
-        </div>
-        
-        <div class="info">
-            <h3>🎯 Quick Access</h3>
-            <p><strong>Live Stream:</strong> <a href="/stream">Real-time camera feed</a></p>
-            <p><strong>Photo Capture:</strong> <a href="/capture">Take high-resolution photos</a></p>
-            <p><strong>Settings:</strong> <a href="/settings">Adjust camera parameters</a></p>
-            <p><strong>Status:</strong> <a href="/status">System information</a></p>
-        </div>
-    </div>
-</body>
-</html>"""
-
-STREAM_PAGE = """<!DOCTYPE html>
-<html>
-<head>
-    <title>ESP32-CAM Live Stream</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #000; color: white; text-align: center; }
-        .container { max-width: 800px; margin: 0 auto; }
-        img { max-width: 100%%; height: auto; border: 2px solid #4CAF50; border-radius: 10px; }
-        .controls { margin: 20px 0; }
-        .controls a { margin: 0 10px; padding: 10px 20px; background: #4CAF50; color: white; text-decoration: none; border-radius: 5px; }
-        .controls a:hover { background: #45a049; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>📹 Live Camera Stream</h1>
-        <img src="/video" alt="Camera Stream">
-        <div class="controls">
-            <a href="/">🏠 Home</a>
-            <a href="/capture">📸 Capture</a>
-            <a href="/settings">⚙️ Settings</a>
-        </div>
-    </div>
-</body>
-</html>"""
-
-SETTINGS_PAGE = """<!DOCTYPE html>
-<html>
-<head>
-    <title>Camera Settings</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; }
-        .setting { margin: 15px 0; padding: 10px; background: #f9f9f9; border-radius: 5px; }
-        .setting label { display: block; margin-bottom: 5px; font-weight: bold; }
-        .setting input, .setting select { width: 100%%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
-        .button { background: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
-        .button:hover { background: #45a049; }
-        .nav a { margin: 0 10px; padding: 10px 20px; background: #666; color: white; text-decoration: none; border-radius: 5px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>⚙️ Camera Settings</h1>
-        
-        <form method="POST" action="/settings">
-            <div class="setting">
-                <label>Quality (10=best, 63=worst):</label>
-                <input type="range" name="quality" min="10" max="63" value="%d">
-            </div>
-            
-            <div class="setting">
-                <label>Brightness (-2 to 2):</label>
-                <input type="range" name="brightness" min="-2" max="2" value="%d">
-            </div>
-            
-            <div class="setting">
-                <label>Contrast (-2 to 2):</label>
-                <input type="range" name="contrast" min="-2" max="2" value="%d">
-            </div>
-            
-            <div class="setting">
-                <label>Saturation (-2 to 2):</label>
-                <input type="range" name="saturation" min="-2" max="2" value="%d">
-            </div>
-            
-            <div class="setting">
-                <label>Flip Image:</label>
-                <select name="flip">
-                    <option value="0"%s>No</option>
-                    <option value="1"%s>Yes</option>
-                </select>
-            </div>
-            
-            <div class="setting">
-                <label>Mirror Image:</label>
-                <select name="mirror">
-                    <option value="0"%s>No</option>
-                    <option value="1"%s>Yes</option>
-                </select>
-            </div>
-            
-            <div class="setting">
-                <button type="submit" class="button">💾 Save Settings</button>
-            </div>
-        </form>
-        
-        <div style="text-align: center; margin-top: 20px;">
-            <a href="/" class="nav">🏠 Home</a>
-            <a href="/stream" class="nav">📹 Stream</a>
-            <a href="/status" class="nav">📊 Status</a>
-        </div>
-    </div>
-</body>
-</html>"""
-
-# Route Handlers
-
-def index(req, resp):
-    """Main page handler"""
-    sta_info = "Connected: " + sta_if.ifconfig()[0] if sta_if and sta_if.isconnected() else "Disconnected"
-    ap_info = "Active: " + ap_if.ifconfig()[0] if ap_if and ap_if.active() else "Inactive"
     
-    content = MAIN_PAGE % (sta_info, ap_info)
-    yield from picoweb.start_response(resp)
-    yield from resp.awrite(content)
-
-def stream_page(req, resp):
-    """Stream page handler"""
-    yield from picoweb.start_response(resp)
-    yield from resp.awrite(STREAM_PAGE)
-
-def send_frame():
-    """Camera frame generator"""
-    try:
-        buf = camera.capture()
-        if buf:
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n'
-                   + buf + b'\r\n')
-            del buf
-            gc.collect()
-    except Exception as e:
-        print("Capture error: " + str(e))
+    def _apply_camera_settings(self):
+        """Apply camera settings from configuration"""
+        settings = CAMERA_CONFIG['DEFAULT_SETTINGS']
         
-def video_stream(req, resp):
-    """Video stream handler"""
-    yield from picoweb.start_response(resp, content_type="multipart/x-mixed-replace; boundary=frame")
-    while True:
-        frame_gen = send_frame()
+        camera.framesize(camera.FRAME_QVGA)  # Use camera constant
+        camera.quality(settings['quality'])
+        camera.brightness(settings['brightness'])
+        camera.contrast(settings['contrast'])
+        camera.saturation(settings['saturation'])
+        camera.flip(settings['flip'])
+        camera.mirror(settings['mirror'])
+    
+    def initialize_sensors(self):
+        """Initialize environmental sensors"""
+        print("🌡️  Initializing environmental sensors...")
+        
         try:
-            frame_data = next(frame_gen)
-            yield from resp.awrite(frame_data)
-            gc.collect()
-            utime.sleep_ms(50)  # ~20 FPS
-        except StopIteration:
-            break
+            self.env_sensor = EnvironmentalSensor(
+                dht_pin=SMART_HOME_PINS['DHT11_SENSOR']
+            )
+            
+            # Test sensor reading
+            if self.env_sensor.read_sensors():
+                self.system_status['sensors_ok'] = True
+                temp = self.env_sensor.get_temperature_celsius()
+                humidity = self.env_sensor.get_humidity()
+                print(f"✅ Environmental sensor ready - {temp}°C, {humidity}%RH")
+                return True
+            else:
+                print("⚠️  Environmental sensor test reading failed")
+                
         except Exception as e:
-            print("Stream error: " + str(e))
-            break
-
-def settings_handler(req, resp):
-    """Settings page handler"""
-    if req.method == "POST":
-        # Handle form submission
+            print(f"❌ Environmental sensor error: {e}")
+        
+        return False
+    
+    def initialize_rgb_strip(self):
+        """Initialize RGB LED strip"""
+        print("🌈 Initializing RGB LED strip...")
+        
         try:
-            yield from req.read_form_data()
+            self.rgb_strip = RGBStrip(
+                pin=SMART_HOME_PINS['RGB_STRIP'],
+                num_leds=8
+            )
             
-            # Update camera settings
-            if 'quality' in req.form:
-                camera_settings['quality'] = int(req.form['quality'])
-            if 'brightness' in req.form:
-                camera_settings['brightness'] = int(req.form['brightness'])
-            if 'contrast' in req.form:
-                camera_settings['contrast'] = int(req.form['contrast'])
-            if 'saturation' in req.form:
-                camera_settings['saturation'] = int(req.form['saturation'])
-            if 'flip' in req.form:
-                camera_settings['flip'] = int(req.form['flip'])
-            if 'mirror' in req.form:
-                camera_settings['mirror'] = int(req.form['mirror'])
-            
-            # Apply settings
-            apply_camera_settings()
-            
-            # Redirect to success
-            yield from picoweb.start_response(resp, status="302", headers={"Location": "/settings?saved=1"})
-            return
+            # Test RGB strip
+            self.rgb_strip.startup_sequence()
+            self.system_status['rgb_ok'] = True
+            print("✅ RGB LED strip initialized")
+            return True
             
         except Exception as e:
-            print("Settings error: " + str(e))
+            print(f"❌ RGB strip error: {e}")
+            return False
     
-    # Show settings form
-    flip_selected = [" selected" if camera_settings['flip'] == 0 else "", " selected" if camera_settings['flip'] == 1 else ""]
-    mirror_selected = [" selected" if camera_settings['mirror'] == 0 else "", " selected" if camera_settings['mirror'] == 1 else ""]
+    def initialize_alarm_system(self):
+        """Initialize smart alarm system"""
+        print("⏰ Initializing alarm system...")
+        
+        try:
+            self.alarm_system = SmartAlarmSystem(
+                active_buzzer_pin=SMART_HOME_PINS['ACTIVE_BUZZER'],
+                passive_buzzer_pin=SMART_HOME_PINS['PASSIVE_BUZZER'],
+                status_led_pin=SMART_HOME_PINS['STATUS_LED'],
+                environmental_sensor=self.env_sensor,
+                rgb_strip=self.rgb_strip
+            )
+            
+            # Set initial time (example - you'd normally get this from NTP)
+            self.alarm_system.set_time(2024, 1, 1, 12, 0, 0)
+            
+            self.system_status['alarm_ok'] = True
+            print("✅ Alarm system initialized")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Alarm system error: {e}")
+            return False
     
-    content = SETTINGS_PAGE % (
-        camera_settings['quality'],
-        camera_settings['brightness'],
-        camera_settings['contrast'],
-        camera_settings['saturation'],
-        flip_selected[0], flip_selected[1],
-        mirror_selected[0], mirror_selected[1]
-    )
+    def initialize_motion_detector(self):
+        """Initialize PIR motion detection system"""
+        print("🚶 Initializing motion detection system...")
+        
+        try:
+            self.motion_detector = MotionDetector(
+                pir_pin=SMART_HOME_PINS['PIR_SENSOR'],
+                motion_led_pin=SMART_HOME_PINS['MOTION_LED']
+            )
+            
+            self.system_status['motion_ok'] = True
+            print("✅ Motion detector initialized")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Motion detector error: {e}")
+            return False
     
-    yield from picoweb.start_response(resp)
-    yield from resp.awrite(content)
-
-def capture_handler(req, resp):
-    """Photo capture handler"""
-    try:
-        # Temporarily set high quality for photo
-        old_quality = camera_settings['quality']
-        camera.quality(10)  # Best quality
+    def initialize_pwm_audio(self):
+        """Initialize PWM audio system"""
+        print("🔊 Initializing PWM audio system...")
         
-        buf = camera.capture()
+        try:
+            self.pwm_audio = PWMAudio(
+                pwm_pin=SMART_HOME_PINS['PWM_AUDIO'],
+                status_led_pin=SMART_HOME_PINS['AUDIO_STATUS_LED']
+            )
+            
+            self.system_status['audio_ok'] = True
+            print("✅ PWM audio initialized")
+            return True
+            
+        except Exception as e:
+            print(f"❌ PWM audio error: {e}")
+            return False
+    
+    def initialize_web_server(self):
+        """Initialize web server with all modules"""
+        print("🌐 Initializing web server...")
         
-        # Restore original quality
-        camera.quality(old_quality)
+        try:
+            # Initialize the web server modules with our components
+            web_server.init_modules(
+                environmental_sensor=self.env_sensor,
+                alarm_sys=self.alarm_system,
+                rgb_controller=self.rgb_strip,
+                motion_detector_sys=self.motion_detector,
+                audio_system=self.pwm_audio
+            )
+            
+            self.system_status['web_server_ok'] = True
+            print("✅ Web server initialized")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Web server error: {e}")
+            return False
+    
+    def display_system_status(self):
+        """Display comprehensive system status"""
+        print("\n" + "=" * 50)
+        print(f"🏠 {self.system_name} - System Status")
+        print("=" * 50)
         
-        if buf:
-            yield from picoweb.start_response(resp, content_type="image/jpeg", 
-                                            headers={"Content-Disposition": "attachment; filename=esp32_photo.jpg"})
-            yield from resp.awrite(buf)
-            del buf
-            gc.collect()
+        # System info
+        uptime = int((utime.time() - self.start_time) / 60)
+        print(f"⏱️  Uptime: {uptime} minutes")
+        print(f"💾 Free Memory: {gc.mem_free()} bytes")
+        
+        # Network status
+        print(f"📡 WiFi STA: {'✅' if self.system_status['wifi_sta_ok'] else '❌'}")
+        print(f"📡 WiFi AP:  {'✅' if self.system_status['wifi_ap_ok'] else '❌'}")
+        
+        # Hardware status
+        print(f"📷 Camera:   {'✅' if self.system_status['camera_ok'] else '❌'}")
+        print(f"🌡️  Sensors:  {'✅' if self.system_status['sensors_ok'] else '❌'}")
+        print(f"⏰ Alarm:    {'✅' if self.system_status['alarm_ok'] else '❌'}")
+        print(f"🌈 RGB Strip:{'✅' if self.system_status['rgb_ok'] else '❌'}")
+        print(f"🚶 Motion:   {'✅' if self.system_status['motion_ok'] else '❌'}")
+        print(f"🔊 Audio:    {'✅' if self.system_status['audio_ok'] else '❌'}")
+        print(f"🌐 Web Server:{'✅' if self.system_status['web_server_ok'] else '❌'}")
+        
+        # Access information
+        if self.system_status['wifi_ap_ok']:
+            print(f"\n🔗 Access Points:")
+            print(f"   AP Mode: http://{self.wifi_ap.ifconfig()[0]}")
+        
+        if self.system_status['wifi_sta_ok']:
+            print(f"   STA Mode: http://{self.wifi_sta.ifconfig()[0]}")
+        
+        print("=" * 50)
+    
+    def update_system_status(self):
+        """Update RGB strip with system status"""
+        if self.rgb_strip:
+            self.rgb_strip.system_status(
+                wifi_ok=self.system_status['wifi_sta_ok'] or self.system_status['wifi_ap_ok'],
+                camera_ok=self.system_status['camera_ok'],
+                sensors_ok=self.system_status['sensors_ok']
+            )
+    
+    def run_system_loop(self):
+        """Main system loop with motion detection"""
+        last_status_update = 0
+        last_alarm_check = 0
+        last_motion_check = 0
+        
+        print("🔄 Starting main system loop...")
+        
+        while True:
+            try:
+                current_time = utime.time()
+                
+                # Check motion detection every 100ms
+                if self.motion_detector and current_time - last_motion_check > 0.1:
+                    if self.motion_detector.check_motion():
+                        # Motion detected - play audio alert
+                        if self.pwm_audio:
+                            self.pwm_audio.play_motion_alert()
+                        # Trigger RGB indication
+                        if self.rgb_strip:
+                            self.rgb_strip.set_color_name('red', 255)
+                            utime.sleep_ms(100)
+                            self.rgb_strip.clear()
+                    last_motion_check = current_time
+                
+                # Update system status every 30 seconds
+                if current_time - last_status_update > 30:
+                    self.update_system_status()
+                    gc.collect()  # Memory cleanup
+                    last_status_update = current_time
+                
+                # Check alarm system every minute
+                if self.alarm_system and current_time - last_alarm_check > 60:
+                    self.alarm_system.update()
+                    last_alarm_check = current_time
+                
+                # Brief sleep to prevent watchdog timeout
+                utime.sleep(0.1)
+                
+            except KeyboardInterrupt:
+                print("\n🛑 System shutdown requested")
+                break
+            except Exception as e:
+                print(f"❌ System loop error: {e}")
+                utime.sleep(5)  # Wait before retrying
+    
+    def start_web_server(self):
+        """Start the web server"""
+        try:
+            print("🌐 Starting web server...")
+            web_server.run_server(
+                host="0.0.0.0",
+                port=80,
+                debug=SYSTEM_CONFIG['DEBUG_MODE']
+            )
+        except Exception as e:
+            print(f"❌ Web server start error: {e}")
+    
+    def initialize_all(self):
+        """Initialize all system components"""
+        success_count = 0
+        total_components = 8  # Updated to include motion detector and PWM audio
+        
+        # Initialize components in order
+        if self.initialize_wifi():
+            success_count += 1
+        
+        if self.initialize_camera():
+            success_count += 1
+        
+        if self.initialize_sensors():
+            success_count += 1
+        
+        if self.initialize_rgb_strip():
+            success_count += 1
+        
+        if self.initialize_alarm_system():
+            success_count += 1
+        
+        if self.initialize_motion_detector():
+            success_count += 1
+        
+        if self.initialize_pwm_audio():
+            success_count += 1
+        
+        if self.initialize_web_server():
+            success_count += 1
+        
+        # Display final status
+        self.display_system_status()
+        
+        print(f"\n🎯 System initialization: {success_count}/{total_components} components ready")
+        
+        if success_count >= 5:  # Minimum viable system (updated threshold)
+            print("✅ System ready to start!")
+            
+            # Play success sound
+            if self.pwm_audio:
+                self.pwm_audio.play_success_sound()
+            
+            return True
         else:
-            yield from picoweb.start_response(resp, status="500")
-            yield from resp.awrite("Capture failed")
+            print("❌ Critical components failed - system cannot start")
             
-    except Exception as e:
-        print("Capture error: " + str(e))
-        yield from picoweb.start_response(resp, status="500")
-        yield from resp.awrite("Error: " + str(e))
+            # Play error sound
+            if self.pwm_audio:
+                self.pwm_audio.play_error_sound()
+            
+            return False
 
-def status_handler(req, resp):
-    """Status page handler"""
-    import micropython
-    
-    # Gather system info
-    mem_info = str(gc.mem_free()) + " bytes free"
-    
-    content = """<!DOCTYPE html>
-<html>
-<head><title>System Status</title></head>
-<body style="font-family: Arial; margin: 20px;">
-<h1>📊 System Status</h1>
-<p><strong>Memory:</strong> %s</p>
-<p><strong>STA Status:</strong> %s</p>
-<p><strong>AP Status:</strong> %s</p>
-<p><strong>Camera Settings:</strong> Quality=%d, Brightness=%d</p>
-<a href="/">🏠 Home</a>
-</body>
-</html>""" % (
-        mem_info,
-        "Connected" if sta_if and sta_if.isconnected() else "Disconnected",
-        "Active" if ap_if and ap_if.active() else "Inactive",
-        camera_settings['quality'],
-        camera_settings['brightness']
-    )
-    
-    yield from picoweb.start_response(resp)
-    yield from resp.awrite(content)
-
-# URL Routes
-ROUTES = [
-    ("/", index),
-    ("/stream", stream_page),
-    ("/video", video_stream),
-    ("/settings", settings_handler),
-    ("/capture", capture_handler),
-    ("/status", status_handler),
-]
 
 def main():
-    """Main application"""
-    print("🚀 ESP32-WROVER Advanced Camera Server Starting...")
+    """Main function"""
+    print("🚀 ESP32-WROVER Smart Home System Starting...")
     
-    # Initialize camera
-    if not camera_init():
-        print("❌ Camera initialization failed!")
-        return
+    # Create system instance
+    smart_home = SmartHomeSystem()
     
-    # Setup WiFi
-    wifi_setup()
+    try:
+        # Initialize all components
+        if smart_home.initialize_all():
+            
+            # Show RGB startup indication
+            if smart_home.rgb_strip:
+                smart_home.rgb_strip.set_color_name('green', 100)
+                utime.sleep(1)
+                smart_home.rgb_strip.clear()
+            
+            # Start web server (this will block)
+            smart_home.start_web_server()
+        else:
+            print("❌ System initialization failed")
+            
+            # Show error on RGB strip
+            if smart_home.rgb_strip:
+                smart_home.rgb_strip.set_color_name('red', 100)
+            
+    except Exception as e:
+        print(f"❌ Critical system error: {e}")
+        
+        # Show error indication
+        if smart_home.rgb_strip:
+            smart_home.rgb_strip.blink_pattern([0, 2, 4, 6], (255, 0, 0), 5)
     
-    # Setup logging
-    logging.basicConfig(level=logging.INFO)
-    
-    # Create and run web application
-    print("🌐 Starting Picoweb server...")
-    app = picoweb.WebApp(__name__, ROUTES)
-    app.run(debug=1, port=80, host="0.0.0.0")
+    finally:
+        print("🛑 System shutdown")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main() 
