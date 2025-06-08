@@ -6,7 +6,7 @@ print("==========================================")
 
 try:
     # Import and run the main system
-    from main_new import main
+    from esp32wroom.main import main
     main()
     
 except ImportError as e:
