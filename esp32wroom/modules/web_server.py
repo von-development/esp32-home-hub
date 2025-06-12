@@ -8,6 +8,42 @@ import gc
 import json
 import network
 
+# Import optimized templates
+try:
+    from optimized_templates import OPTIMIZED_MAIN_PAGE, OPTIMIZED_STREAM_PAGE
+    USE_OPTIMIZED_TEMPLATES = True
+    print("✅ Using optimized templates for better ESP32 performance")
+except ImportError:
+    USE_OPTIMIZED_TEMPLATES = False
+    print("⚠️ Optimized templates not found, using standard templates")
+
+# Import API helpers
+try:
+    from modules.api_helpers import json_response, error_response, success_response, parse_json_body, safe_api_call
+    print("✅ API helpers loaded")
+except ImportError:
+    print("⚠️ API helpers not found, using basic responses")
+    # Fallback functions
+    def json_response(resp, data, status="200"):
+        yield from picoweb.start_response(resp, content_type="application/json", status=status)
+        yield from resp.awrite(json.dumps(data))
+    def error_response(resp, message, status="500"):
+        yield from picoweb.start_response(resp, content_type="application/json", status=status)
+        yield from resp.awrite('{"error": "' + message + '"}')
+    def success_response(resp, message="OK", data=None):
+        result = {"status": "success", "message": message}
+        if data: result.update(data)
+        yield from json_response(resp, result)
+    def parse_json_body(req):
+        try:
+            content_length = int(req.headers.get(b'Content-Length', 0))
+            if content_length > 0:
+                body = yield from req.reader.readexactly(content_length)
+                return json.loads(body.decode())
+        except: pass
+        return {}
+    def safe_api_call(func): return func
+
 # Camera settings (global like main.py)
 camera_settings = {
     'resolution': camera.FRAME_QVGA,
@@ -667,8 +703,14 @@ def index(req, resp):
     sta_info, ap_info = get_network_info()
     uptime_minutes = int((utime.time() - server_status['start_time']) / 60)
     
+    # Choose template based on availability
+    if USE_OPTIMIZED_TEMPLATES:
+        template = OPTIMIZED_MAIN_PAGE
+    else:
+        template = MAIN_PAGE
+    
     # Use simple string replacement instead of % formatting to avoid conflicts
-    content = MAIN_PAGE.replace("STA_INFO_PLACEHOLDER", sta_info)
+    content = template.replace("STA_INFO_PLACEHOLDER", sta_info)
     content = content.replace("AP_INFO_PLACEHOLDER", ap_info)
     content = content.replace("UPTIME_PLACEHOLDER", str(uptime_minutes))
     
@@ -677,8 +719,14 @@ def index(req, resp):
 
 def stream_page(req, resp):
     """Stream page handler"""
+    # Choose template based on availability
+    if USE_OPTIMIZED_TEMPLATES:
+        template = OPTIMIZED_STREAM_PAGE
+    else:
+        template = STREAM_PAGE
+        
     yield from picoweb.start_response(resp)
-    yield from resp.awrite(STREAM_PAGE)
+    yield from resp.awrite(template)
 
 def send_frame():
     """Camera frame generator (same as main.py)"""
@@ -856,130 +904,118 @@ def api_sensors(req, resp):
         except:
             pass
 
+@safe_api_call
 def api_rgb(req, resp):
     """RGB strip API endpoint with POST controls"""
-    try:
-        if req.method == "POST":
-            # Handle RGB control commands
-            if rgb_strip:
-                try:
-                    # Read the raw body data
-                    content_length = int(req.headers.get(b'Content-Length', 0))
-                    if content_length > 0:
-                        body = yield from req.reader.readexactly(content_length)
-                        data = json.loads(body.decode())
-                        action = data.get('action')
-                        
-                        if action == 'color':
-                            r, g, b = data.get('r', 0), data.get('g', 0), data.get('b', 0)
-                            rgb_strip.set_all(r, g, b)  # Use correct method name
-                        elif action == 'brightness':
-                            brightness = int(data.get('value', 50))
-                            # For brightness, use a white color scaled by brightness
-                            rgb_strip.set_all(brightness, brightness, brightness)
-                        elif action == 'pattern':
-                            pattern = data.get('pattern', 'solid')
-                            if pattern == 'rainbow':
-                                rgb_strip.rainbow_cycle()
-                            elif pattern == 'breathing':
-                                # Implement breathing effect
-                                rgb_strip.set_color_name('blue', 100)
-                            elif pattern == 'startup':
-                                rgb_strip.startup_sequence()
-                        elif action == 'off':
-                            rgb_strip.clear()
-                            
-                        yield from picoweb.start_response(resp, content_type="application/json")
-                        yield from resp.awrite('{"status": "success"}')
-                        return
-                except Exception as e:
-                    print(f"RGB control error: {e}")
+    if req.method == "POST":
+        # Handle RGB control commands
+        if not rgb_strip:
+            yield from error_response(resp, "RGB strip not available")
+            return
+            
+        data = yield from parse_json_body(req)
+        action = data.get('action')
         
+        if action == 'color':
+            r, g, b = data.get('r', 0), data.get('g', 0), data.get('b', 0)
+            rgb_strip.set_all(r, g, b)
+            yield from success_response(resp, f"Color set to RGB({r},{g},{b})")
+        elif action == 'brightness':
+            brightness = int(data.get('value', 50))
+            # Scale brightness to 0-255 range
+            brightness_scaled = int((brightness / 100) * 255)
+            rgb_strip.set_all(brightness_scaled, brightness_scaled, brightness_scaled)
+            yield from success_response(resp, f"Brightness set to {brightness}%")
+        elif action == 'pattern':
+            pattern = data.get('pattern', 'solid')
+            try:
+                if pattern == 'rainbow':
+                    rgb_strip.rainbow_cycle()
+                elif pattern == 'breathing':
+                    rgb_strip.set_color_name('blue', 100)
+                elif pattern == 'startup':
+                    rgb_strip.startup_sequence()
+                yield from success_response(resp, f"Pattern '{pattern}' activated")
+            except Exception as e:
+                yield from error_response(resp, f"Pattern error: {e}")
+        elif action == 'off':
+            rgb_strip.clear()
+            yield from success_response(resp, "RGB strip turned off")
+        else:
+            yield from error_response(resp, f"Unknown action: {action}")
+    else:
         # GET request - return status
         if rgb_strip:
             data = {
                 "status": "active",
-                "current_pattern": getattr(rgb_strip, 'current_status', 'ready')
+                "current_pattern": getattr(rgb_strip, 'current_status', 'ready'),
+                "available": True
             }
         else:
-            data = {"error": "RGB strip not available"}
+            data = {"error": "RGB strip not available", "available": False}
         
-        yield from picoweb.start_response(resp, content_type="application/json")
-        yield from resp.awrite(json.dumps(data))
-    except OSError:
-        pass
-    except Exception as e:
-        try:
-            yield from picoweb.start_response(resp, status="500")
-            yield from resp.awrite('{"error": "API error"}')
-        except:
-            pass
+        yield from json_response(resp, data)
 
+@safe_api_call
 def api_alarm(req, resp):
     """Alarm system API endpoint with POST controls"""
-    try:
-        if req.method == "POST":
-            # Handle alarm control commands
-            if alarm_system:
-                try:
-                    # Read the raw body data
-                    content_length = int(req.headers.get(b'Content-Length', 0))
-                    if content_length > 0:
-                        body = yield from req.reader.readexactly(content_length)
-                        data = json.loads(body.decode())
-                        action = data.get('action')
-                        
-                        if action == 'toggle':
-                            if hasattr(alarm_system, 'armed'):
-                                if alarm_system.armed:
-                                    alarm_system.armed = False
-                                else:
-                                    alarm_system.armed = True
-                        elif action == 'test_buzzer':
-                            # Test the passive buzzer
-                            if hasattr(alarm_system, 'passive_buzzer'):
-                                alarm_system.passive_buzzer.beep(1000, 500)
-                        elif action == 'test_led':
-                            # Test the status LED
-                            if hasattr(alarm_system, 'status_led'):
-                                alarm_system.status_led.on()
-                                utime.sleep_ms(500)
-                                alarm_system.status_led.off()
-                        elif action == 'panic':
-                            # Trigger alarm sequence
-                            if hasattr(alarm_system, 'normal_alarm_sequence'):
-                                alarm_system.normal_alarm_sequence()
-                        elif action == 'all_clear':
-                            # Stop any alarms
-                            if hasattr(alarm_system, 'stop_alarm'):
-                                alarm_system.stop_alarm()
-                                
-                        yield from picoweb.start_response(resp, content_type="application/json")
-                        yield from resp.awrite('{"status": "success"}')
-                        return
-                except Exception as e:
-                    print(f"Alarm control error: {e}")
+    if req.method == "POST":
+        # Handle alarm control commands
+        if not alarm_system:
+            yield from error_response(resp, "Alarm system not available")
+            return
+            
+        data = yield from parse_json_body(req)
+        action = data.get('action')
         
+        if action == 'toggle':
+            if hasattr(alarm_system, 'armed'):
+                alarm_system.armed = not alarm_system.armed
+                status = "armed" if alarm_system.armed else "disarmed"
+                yield from success_response(resp, f"Alarm {status}")
+            else:
+                yield from error_response(resp, "Alarm arming not supported")
+        elif action == 'test_buzzer':
+            if hasattr(alarm_system, 'passive_buzzer'):
+                alarm_system.passive_buzzer.beep(1000, 500)
+                yield from success_response(resp, "Buzzer test completed")
+            else:
+                yield from error_response(resp, "Buzzer not available")
+        elif action == 'test_led':
+            if hasattr(alarm_system, 'status_led'):
+                alarm_system.status_led.on()
+                utime.sleep_ms(500)
+                alarm_system.status_led.off()
+                yield from success_response(resp, "LED test completed")
+            else:
+                yield from error_response(resp, "Status LED not available")
+        elif action == 'panic':
+            if hasattr(alarm_system, 'normal_alarm_sequence'):
+                alarm_system.normal_alarm_sequence()
+                yield from success_response(resp, "Panic alarm triggered")
+            else:
+                yield from error_response(resp, "Panic function not available")
+        elif action == 'all_clear':
+            if hasattr(alarm_system, 'stop_alarm'):
+                alarm_system.stop_alarm()
+                yield from success_response(resp, "All clear - alarm stopped")
+            else:
+                yield from error_response(resp, "Stop alarm function not available")
+        else:
+            yield from error_response(resp, f"Unknown action: {action}")
+    else:
         # GET request - return status
         if alarm_system:
             data = {
                 "armed": getattr(alarm_system, 'armed', False),
                 "triggered": getattr(alarm_system, 'alarm_active', False),
-                "status": "active"
+                "status": "active",
+                "available": True
             }
         else:
-            data = {"error": "Alarm system not available"}
+            data = {"error": "Alarm system not available", "available": False}
         
-        yield from picoweb.start_response(resp, content_type="application/json")
-        yield from resp.awrite(json.dumps(data))
-    except OSError:
-        pass
-    except Exception as e:
-        try:
-            yield from picoweb.start_response(resp, status="500")
-            yield from resp.awrite('{"error": "API error"}')
-        except:
-            pass
+        yield from json_response(resp, data)
 
 def api_camera(req, resp):
     """Camera API endpoint"""
@@ -1017,115 +1053,134 @@ def api_system(req, resp):
         except:
             pass
 
+@safe_api_call
 def api_motion(req, resp):
     """Motion detection API endpoint with POST controls"""
-    try:
-        if req.method == "POST":
-            # Handle motion control commands
-            if motion_detector:
-                try:
-                    # Read the raw body data
-                    content_length = int(req.headers.get(b'Content-Length', 0))
-                    if content_length > 0:
-                        body = yield from req.reader.readexactly(content_length)
-                        data = json.loads(body.decode())
-                        action = data.get('action')
-                        
-                        if action == 'toggle':
-                            if motion_detector.is_armed:
-                                motion_detector.disarm_motion_detection()
-                            else:
-                                motion_detector.arm_motion_detection()
-                        elif action == 'test_led':
-                            motion_detector.test_motion_led()
-                        elif action == 'arm':
-                            motion_detector.arm_motion_detection()
-                        elif action == 'disarm':
-                            motion_detector.disarm_motion_detection()
-                            
-                        yield from picoweb.start_response(resp, content_type="application/json")
-                        yield from resp.awrite('{"status": "success"}')
-                        return
-                except Exception as e:
-                    print(f"Motion control error: {e}")
+    if req.method == "POST":
+        # Handle motion control commands
+        if not motion_detector:
+            yield from error_response(resp, "Motion detector not available")
+            return
+            
+        data = yield from parse_json_body(req)
+        action = data.get('action')
         
-        # GET request - return status
-        if motion_detector:
-            data = motion_detector.get_motion_status()
+        if action == 'toggle':
+            if hasattr(motion_detector, 'is_armed'):
+                if motion_detector.is_armed:
+                    motion_detector.disarm_motion_detection()
+                    yield from success_response(resp, "Motion detection disarmed")
+                else:
+                    motion_detector.arm_motion_detection()
+                    yield from success_response(resp, "Motion detection armed")
+            else:
+                yield from error_response(resp, "Motion arming not supported")
+        elif action == 'test_led':
+            if hasattr(motion_detector, 'test_motion_led'):
+                motion_detector.test_motion_led()
+                yield from success_response(resp, "Motion LED test completed")
+            else:
+                yield from error_response(resp, "Motion LED test not available")
+        elif action == 'arm':
+            if hasattr(motion_detector, 'arm_motion_detection'):
+                motion_detector.arm_motion_detection()
+                yield from success_response(resp, "Motion detection armed")
+            else:
+                yield from error_response(resp, "Motion arming not available")
+        elif action == 'disarm':
+            if hasattr(motion_detector, 'disarm_motion_detection'):
+                motion_detector.disarm_motion_detection()
+                yield from success_response(resp, "Motion detection disarmed")
+            else:
+                yield from error_response(resp, "Motion disarming not available")
         else:
-            data = {"error": "Motion detector not available"}
+            yield from error_response(resp, f"Unknown action: {action}")
+    else:
+        # GET request - return status
+        if motion_detector and hasattr(motion_detector, 'get_motion_status'):
+            data = motion_detector.get_motion_status()
+            data['available'] = True
+        else:
+            data = {"error": "Motion detector not available", "available": False}
         
-        yield from picoweb.start_response(resp, content_type="application/json")
-        yield from resp.awrite(json.dumps(data))
-    except OSError:
-        pass
-    except Exception as e:
-        try:
-            yield from picoweb.start_response(resp, status="500")
-            yield from resp.awrite('{"error": "API error"}')
-        except:
-            pass
+        yield from json_response(resp, data)
 
+@safe_api_call
 def api_audio(req, resp):
     """PWM Audio API endpoint with POST controls"""
-    try:
-        if req.method == "POST":
-            # Handle audio control commands
-            if pwm_audio:
-                try:
-                    # Read the raw body data
-                    content_length = int(req.headers.get(b'Content-Length', 0))
-                    if content_length > 0:
-                        body = yield from req.reader.readexactly(content_length)
-                        data = json.loads(body.decode())
-                        action = data.get('action')
-                        
-                        if action == 'toggle':
-                            if pwm_audio.is_enabled:
-                                pwm_audio.disable_audio()
-                            else:
-                                pwm_audio.enable_audio()
-                        elif action == 'volume':
-                            volume = int(data.get('value', 25))
-                            pwm_audio.set_volume(volume)
-                        elif action == 'play':
-                            sound = data.get('sound', 'notification')
-                            if sound == 'startup':
-                                pwm_audio.play_startup_sound()
-                            elif sound == 'success':
-                                pwm_audio.play_success_sound()
-                            elif sound == 'alert':
-                                pwm_audio.play_motion_alert()
-                            elif sound == 'alarm':
-                                pwm_audio.play_alarm_sound()
-                            elif sound == 'error':
-                                pwm_audio.play_error_sound()
-                            elif sound == 'sweep':
-                                pwm_audio.play_sweep()
-                            else:
-                                pwm_audio.play_notification_beep()
-                        elif action == 'test':
-                            pwm_audio.test_audio_system()
-                            
-                        yield from picoweb.start_response(resp, content_type="application/json")
-                        yield from resp.awrite('{"status": "success"}')
-                        return
-                except Exception as e:
-                    print(f"Audio control error: {e}")
+    if req.method == "POST":
+        # Handle audio control commands
+        if not pwm_audio:
+            yield from error_response(resp, "PWM audio not available")
+            return
+            
+        data = yield from parse_json_body(req)
+        action = data.get('action')
         
-        # GET request - return status
-        if pwm_audio:
-            data = pwm_audio.get_audio_status()
+        if action == 'toggle':
+            if hasattr(pwm_audio, 'is_enabled'):
+                if pwm_audio.is_enabled:
+                    pwm_audio.disable_audio()
+                    yield from success_response(resp, "Audio disabled")
+                else:
+                    pwm_audio.enable_audio()
+                    yield from success_response(resp, "Audio enabled")
+            else:
+                yield from error_response(resp, "Audio toggle not supported")
+        elif action == 'volume':
+            volume = int(data.get('value', 25))
+            if hasattr(pwm_audio, 'set_volume'):
+                pwm_audio.set_volume(volume)
+                yield from success_response(resp, f"Volume set to {volume}%")
+            else:
+                yield from error_response(resp, "Volume control not available")
+        elif action == 'play':
+            sound = data.get('sound', 'notification')
+            sound_played = False
+            
+            if sound == 'startup' and hasattr(pwm_audio, 'play_startup_sound'):
+                pwm_audio.play_startup_sound()
+                sound_played = True
+            elif sound == 'success' and hasattr(pwm_audio, 'play_success_sound'):
+                pwm_audio.play_success_sound()
+                sound_played = True
+            elif sound == 'alert' and hasattr(pwm_audio, 'play_motion_alert'):
+                pwm_audio.play_motion_alert()
+                sound_played = True
+            elif sound == 'alarm' and hasattr(pwm_audio, 'play_alarm_sound'):
+                pwm_audio.play_alarm_sound()
+                sound_played = True
+            elif sound == 'error' and hasattr(pwm_audio, 'play_error_sound'):
+                pwm_audio.play_error_sound()
+                sound_played = True
+            elif sound == 'sweep' and hasattr(pwm_audio, 'play_sweep'):
+                pwm_audio.play_sweep()
+                sound_played = True
+            elif hasattr(pwm_audio, 'play_notification_beep'):
+                pwm_audio.play_notification_beep()
+                sound_played = True
+                
+            if sound_played:
+                yield from success_response(resp, f"Sound '{sound}' played")
+            else:
+                yield from error_response(resp, f"Sound '{sound}' not available")
+        elif action == 'test':
+            if hasattr(pwm_audio, 'test_audio_system'):
+                pwm_audio.test_audio_system()
+                yield from success_response(resp, "Audio system test completed")
+            else:
+                yield from error_response(resp, "Audio test not available")
         else:
-            data = {"error": "PWM audio not available"}
+            yield from error_response(resp, f"Unknown action: {action}")
+    else:
+        # GET request - return status
+        if pwm_audio and hasattr(pwm_audio, 'get_audio_status'):
+            data = pwm_audio.get_audio_status()
+            data['available'] = True
+        else:
+            data = {"error": "PWM audio not available", "available": False}
         
-        yield from picoweb.start_response(resp, content_type="application/json")
-        yield from resp.awrite(json.dumps(data))
-    except OSError:
-        pass
-    except Exception as e:
-        yield from picoweb.start_response(resp, status="500")
-        yield from resp.awrite('{"error": "API error"}')
+        yield from json_response(resp, data)
 
 def api_photos(req, resp):
     """Photo gallery API endpoint"""
