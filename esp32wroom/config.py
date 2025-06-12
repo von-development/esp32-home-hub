@@ -56,8 +56,8 @@ SMART_HOME_PINS = {
 
 WIFI_CONFIG = {
     # Station Mode (Connect to existing router)
-    'STA_SSID': "Avenida",
-    'STA_PASSWORD': "Avenida2024",
+    'STA_SSID': "iPhone (188)",
+    'STA_PASSWORD': "12345678",
     'STA_TIMEOUT': 15,  # Connection timeout in seconds
     
     # Access Point Mode (Create own hotspot)
